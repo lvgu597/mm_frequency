@@ -8,7 +8,7 @@ from torch.nn.modules.batchnorm import _BatchNorm
 from mmdet.utils import get_root_logger
 from ..builder import BACKBONES
 from ..utils import ResLayer
-
+from .cbam import CBAM
 
 class BasicBlock(nn.Module):
     expansion = 1
@@ -182,7 +182,7 @@ class Bottleneck(nn.Module):
                 dilation=dilation,
                 bias=False)
         else:
-            assert self.conv_cfg is None, 'conv_cfg must be None for DCN'
+            # assert self.conv_cfg is None, 'conv_cfg must be None for DCN'
             self.conv2 = build_conv_layer(
                 dcn,
                 planes,
@@ -661,3 +661,35 @@ class ResNetV1d(ResNet):
     def __init__(self, **kwargs):
         super(ResNetV1d, self).__init__(
             deep_stem=True, avg_down=True, **kwargs)
+
+
+@BACKBONES.register_module()
+class ResNetCBam(ResNet):
+
+    def __init__(self, **kwargs):
+        super(ResNetCBam, self).__init__(**kwargs)
+        self.bam1 = CBAM(64*self.block.expansion)
+        self.bam2 = CBAM(128*self.block.expansion)
+        self.bam3 = CBAM(256*self.block.expansion)
+        self.bam4 = CBAM(512*self.block.expansion)
+
+    def forward(self, x):
+        if self.deep_stem:
+            x = self.stem(x)
+        else:
+            x = self.conv1(x)
+            x = self.norm1(x)
+            x = self.relu(x)
+        x = self.maxpool(x)
+        outs = []
+
+        for i, layer_name in enumerate(self.res_layers):
+            res_layer = getattr(self, layer_name)
+            x = res_layer(x)
+
+            # CBAM: Convolutional Block Attention Module             
+            bam = getattr(self, f'bam{i+1}')
+            x = bam(x)
+            if i in self.out_indices:
+                outs.append(x)
+        return tuple(outs)
